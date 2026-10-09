@@ -1263,3 +1263,20 @@ Whenever a feature changes:
 **Project principle:** Prefer complete, integrated implementations over
 disconnected helpers, unused configuration, or partial code that removes
 existing functionality.
+
+
+## Production Error Handling, Logging, and Configuration Cache
+
+LocalPHP registers a web exception handler before bootstrapping the application. With `APP_DEBUG=true`, the browser receives a detailed escaped exception page for development. With `APP_DEBUG=false`, visitors receive a generic HTTP 500 page; exception details are written to `storage/logs/localphp-YYYY-MM-DD.log`. Apache deny rules protect the storage directory, and log/cache files are ignored by Git. Keep `APP_DEBUG=false` in production.
+
+Configuration files can be compiled after setting the desired environment values:
+
+```bash
+php local config:cache
+# or
+php local optimize
+```
+
+The cache is stored in `storage/cache/config.php` and is used by `config()`. After changing `.env` or files in `config/`, rebuild it with `php local config:cache`, or remove it with `php local config:clear`. `php local optimize:clear` clears cache files. PHP OPcache is a server-level optimization and must be enabled in the PHP configuration separately.
+
+Routes are currently registered from `routes/web.php` at application startup and are not serialized into a route cache; route closures make safe route serialization unsuitable without a dedicated route compiler. Avoid exposing `storage/` publicly and verify Apache honors `.htaccess` rules in deployment.

@@ -34,6 +34,10 @@ final class Kernel
             return match ($command) {
                 'list', 'help' => $this->listCommands(),
                 'about' => $this->about(),
+                'config:cache' => $this->cacheConfig(),
+                'config:clear' => $this->clearConfigCache(),
+                'optimize' => $this->optimize(),
+                'optimize:clear' => $this->clean(['cache']),
 
                 'make:migration' => $this->makeMigration(
                     $arguments[0] ?? ''
@@ -60,21 +64,13 @@ final class Kernel
                 default => $this->unknownCommand($command),
             };
         } catch (Throwable $exception) {
-            fwrite(
-                STDERR,
-                'Error: ' . $exception->getMessage() . PHP_EOL
-            );
+            $debug = filter_var(env('APP_DEBUG', false), FILTER_VALIDATE_BOOLEAN);
 
-            if (
-                filter_var(
-                    env('APP_DEBUG', false),
-                    FILTER_VALIDATE_BOOLEAN
-                )
-            ) {
-                fwrite(
-                    STDERR,
-                    $exception->getTraceAsString() . PHP_EOL
-                );
+            if ($debug) {
+                fwrite(STDERR, 'Error: ' . $exception->getMessage() . PHP_EOL);
+                fwrite(STDERR, $exception->getTraceAsString() . PHP_EOL);
+            } else {
+                fwrite(STDERR, 'Command failed. Check storage/logs or your server logs for details.' . PHP_EOL);
             }
 
             return 1;
@@ -139,6 +135,10 @@ final class Kernel
         $commands = [
             'list' => 'Display available commands',
             'about' => 'Display framework information',
+            'config:cache' => 'Compile configuration into a cache file',
+            'config:clear' => 'Remove the compiled configuration cache',
+            'optimize' => 'Prepare configuration cache for production',
+            'optimize:clear' => 'Clear framework optimization cache',
             'make:migration <name>' => 'Create a migration',
             'migrate' => 'Run pending migrations',
             'migrate:status' => 'Show migration status',
@@ -345,6 +345,52 @@ PHP;
 
         echo "Seeded: {$name}" . PHP_EOL;
 
+        return 0;
+    }
+
+    /** Compile config/*.php into a production cache. */
+    private function cacheConfig(): int
+    {
+        $config = [];
+        $files = glob($this->basePath . DIRECTORY_SEPARATOR . 'config' . DIRECTORY_SEPARATOR . '*.php') ?: [];
+        foreach ($files as $file) {
+            $name = basename($file, '.php');
+            $value = require $file;
+            if (!is_array($value)) {
+                throw new RuntimeException("Configuration file [{$file}] must return an array.");
+            }
+            $config[$name] = $value;
+        }
+
+        $directory = $this->basePath . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'cache';
+        $this->ensureDirectory($directory);
+        $path = $directory . DIRECTORY_SEPARATOR . 'config.php';
+        $contents = "<?php\n\ndeclare(strict_types=1);\n\nreturn " . var_export($config, true) . ";\n";
+        if (file_put_contents($path, $contents, LOCK_EX) === false) {
+            throw new RuntimeException('Unable to write configuration cache.');
+        }
+        echo "Configuration cached: storage/cache/config.php" . PHP_EOL;
+        return 0;
+    }
+
+    private function clearConfigCache(): int
+    {
+        $path = $this->basePath . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'cache' . DIRECTORY_SEPARATOR . 'config.php';
+        if (is_file($path) && !unlink($path)) {
+            throw new RuntimeException('Unable to remove configuration cache.');
+        }
+        echo is_file($path) ? "Configuration cache could not be cleared." . PHP_EOL : "Configuration cache cleared." . PHP_EOL;
+        return 0;
+    }
+
+    private function optimize(): int
+    {
+        $result = $this->cacheConfig();
+        if ($result !== 0) {
+            return $result;
+        }
+        echo "LocalPHP production configuration optimization complete." . PHP_EOL;
+        echo "Note: PHP OPcache should be enabled in your PHP/server configuration for bytecode caching." . PHP_EOL;
         return 0;
     }
 

@@ -35,7 +35,7 @@ return [
     'debug' => filter_var(
         env(
             'APP_DEBUG',
-            true
+            env('APP_ENV', 'local') !== 'production'
         ),
         FILTER_VALIDATE_BOOLEAN
     ),
@@ -64,6 +64,10 @@ return [
         'APP_TIMEZONE',
         'Asia/Manila'
     ),
+
+    'maintenance' => filter_var(env('APP_MAINTENANCE', false), FILTER_VALIDATE_BOOLEAN),
+
+    'log_level' => env('LOG_LEVEL', 'error'),
 
     /*
     |--------------------------------------------------------------------------

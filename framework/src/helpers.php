@@ -56,27 +56,29 @@ if (!function_exists('config')) {
         ?string $key = null,
         mixed $default = null
     ): mixed {
-        static $configuration = [];
+        static $configuration = null;
 
-        if (empty($configuration)) {
+        if ($configuration === null) {
             $basePath = app()->basePath();
+            $cacheFile = $basePath
+                . DIRECTORY_SEPARATOR . 'storage'
+                . DIRECTORY_SEPARATOR . 'cache'
+                . DIRECTORY_SEPARATOR . 'config.php';
 
-            $files = glob(
-                $basePath .
-                DIRECTORY_SEPARATOR .
-                'config' .
-                DIRECTORY_SEPARATOR .
-                '*.php'
-            ) ?: [];
+            if (is_file($cacheFile)) {
+                $cached = require $cacheFile;
+                $configuration = is_array($cached) ? $cached : [];
+            } else {
+                $configuration = [];
+                $files = glob(
+                    $basePath . DIRECTORY_SEPARATOR . 'config' . DIRECTORY_SEPARATOR . '*.php'
+                ) ?: [];
 
-            foreach ($files as $file) {
-                $name = basename(
-                    $file,
-                    '.php'
-                );
-
-                $configuration[$name] =
-                    require $file;
+                foreach ($files as $file) {
+                    $name = basename($file, '.php');
+                    $loaded = require $file;
+                    $configuration[$name] = is_array($loaded) ? $loaded : [];
+                }
             }
         }
 
