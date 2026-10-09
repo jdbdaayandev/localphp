@@ -10,6 +10,8 @@ use LocalPHP\Http\Response;
 use LocalPHP\Routing\Router;
 use LocalPHP\Session\SessionManager;
 use LocalPHP\Database\DatabaseManager;
+use LocalPHP\Support\Environment;
+use InvalidArgumentException;
 
 class Application extends Container
 {
@@ -25,6 +27,23 @@ class Application extends Container
         $this->basePath =
             $basePath
             ?? dirname(__DIR__, 2);
+
+        // Load .env before any config file calls env().
+        Environment::load($this->basePath);
+
+        // Apply the configured timezone as part of application startup.
+        $timezone = (string) Environment::get(
+            'APP_TIMEZONE',
+            'UTC'
+        );
+
+        if (!in_array($timezone, timezone_identifiers_list(), true)) {
+            throw new InvalidArgumentException(
+                "Invalid APP_TIMEZONE value [{$timezone}]."
+            );
+        }
+
+        date_default_timezone_set($timezone);
 
         $GLOBALS['app'] = $this;
 

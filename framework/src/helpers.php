@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use LocalPHP\Http\Request;
 use LocalPHP\Http\Response;
+use LocalPHP\Support\Environment;
 use LocalPHP\Session\SessionManager;
 use LocalPHP\View\View;
 
@@ -40,99 +41,7 @@ if (!function_exists('env')) {
         string $key,
         mixed $default = null
     ): mixed {
-        static $loaded = false;
-        static $values = [];
-
-        if (!$loaded) {
-            $file = dirname(
-                __DIR__,
-                2
-            ) . DIRECTORY_SEPARATOR . '.env';
-
-            if (file_exists($file)) {
-                $lines = file(
-                    $file,
-                    FILE_IGNORE_NEW_LINES |
-                    FILE_SKIP_EMPTY_LINES
-                );
-
-                foreach ($lines as $line) {
-                    $line = trim($line);
-
-                    if (
-                        $line === '' ||
-                        str_starts_with(
-                            $line,
-                            '#'
-                        )
-                    ) {
-                        continue;
-                    }
-
-                    if (!str_contains(
-                        $line,
-                        '='
-                    )) {
-                        continue;
-                    }
-
-                    [
-                        $name,
-                        $value
-                    ] = explode(
-                        '=',
-                        $line,
-                        2
-                    );
-
-                    $name = trim($name);
-                    $value = trim($value);
-
-                    if (
-                        strlen($value) >= 2 &&
-                        (
-                            (
-                                $value[0] === '"' &&
-                                $value[-1] === '"'
-                            ) ||
-                            (
-                                $value[0] === "'" &&
-                                $value[-1] === "'"
-                            )
-                        )
-                    ) {
-                        $value = substr(
-                            $value,
-                            1,
-                            -1
-                        );
-                    }
-
-                    $values[$name] = $value;
-                }
-            }
-
-            $loaded = true;
-        }
-
-        $value = $values[$key]
-            ?? $_ENV[$key]
-            ?? $_SERVER[$key]
-            ?? $default;
-
-        if ($value === 'true') {
-            return true;
-        }
-
-        if ($value === 'false') {
-            return false;
-        }
-
-        if ($value === 'null') {
-            return null;
-        }
-
-        return $value;
+        return Environment::get($key, $default);
     }
 }
 
