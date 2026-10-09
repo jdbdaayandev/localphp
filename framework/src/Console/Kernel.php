@@ -43,6 +43,8 @@ final class Kernel
                 'migrate:rollback' => $this->rollback(),
                 'migrate:fresh' => $this->fresh($arguments),
                 'make:controller' => $this->makeController($argv[2] ?? ''),
+                'make:model' => $this->makeModel($argv[2] ?? ''),
+                'make:filter' => $this->makeFilter($argv[2] ?? ''),
 
                 'make:seeder' => $this->makeSeeder(
                     $arguments[0] ?? ''
@@ -148,6 +150,8 @@ final class Kernel
             'clean:cache' => 'Clear cache files',
             'clean:logs' => 'Clear log files',
             'make:controller' => 'Create a new controller',
+            'make:model'  => 'Create a new model',
+            'make:filter' => 'Create a new filter',
         ];
 
         foreach ($commands as $name => $description) {
@@ -501,14 +505,14 @@ PHP;
         $className = $segments[$lastIndex];
 
         /*
-        * Append Controller only when the name does not
-        * already contain the Controller suffix.
-        *
-        * Examples:
-        * Home       -> HomeController
-        * HomeController -> HomeController
-        * HomeController2 -> HomeController2
-        */
+         * Append Controller only when the name does not
+         * already contain the Controller suffix.
+         *
+         * Examples:
+         * Home       -> HomeController
+         * HomeController -> HomeController
+         * HomeController2 -> HomeController2
+         */
         if (!preg_match('/Controller\d*$/', $className)) {
             $className .= 'Controller';
         }
@@ -570,7 +574,6 @@ PHP;
             return view('home');
         }
     }
-
     PHP;
 
         if (file_put_contents($filePath, $controller) === false) {
@@ -583,6 +586,213 @@ PHP;
         echo "  Class: {$namespace}\\{$className}\n";
 
         return 0;
+    }
+
+    /**
+     * Create a new model.
+     *
+     * Usage:
+     * php local make:model User
+     * php local make:model Admin/Staff
+     */
+    private function makeModel(string $name): int
+    {
+        return $this->generateClass(
+            name: $name,
+            type: 'model',
+            baseNamespace: 'App\\Models',
+            baseDirectory: 'app/Models',
+            template: 'model'
+        );
+    }
+
+    /**
+     * Create a new filter.
+     *
+     * Usage:
+     * php local make:filter UserFilter
+     * php local make:filter Admin/OrderFilter
+     */
+    private function makeFilter(string $name): int
+    {
+        return $this->generateClass(
+            name: $name,
+            type: 'filter',
+            baseNamespace: 'App\\Filters',
+            baseDirectory: 'app/Filters',
+            template: 'filter'
+        );
+    }
+
+    /**
+     * Generate a PHP class file.
+     */
+    private function generateClass(
+        string $name,
+        string $type,
+        string $baseNamespace,
+        string $baseDirectory,
+        string $template
+    ): int {
+        $name = trim(str_replace('\\', '/', $name), '/');
+
+        if ($name === '') {
+            echo ucfirst($type) . " name is required.\n";
+            echo "Usage: php local make:{$type} Name\n";
+
+            return 1;
+        }
+
+        $segments = explode('/', $name);
+
+        foreach ($segments as $segment) {
+            if (
+                $segment === ''
+                || !preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $segment)
+            ) {
+                echo "Invalid {$type} name: {$name}\n";
+                return 1;
+            }
+        }
+
+        $lastIndex = count($segments) - 1;
+        $className = $segments[$lastIndex];
+
+        if ($type === 'model') {
+            if (!str_ends_with($className, 'Model')) {
+                // Models conventionally use names such as User and Product.
+                // Do not force a Model suffix.
+            }
+        } elseif ($type === 'filter') {
+            if (!preg_match('/Filter\d*$/', $className)) {
+                $className .= 'Filter';
+            }
+        }
+
+        $segments[$lastIndex] = $className;
+        $className = array_pop($segments);
+
+        $namespace = $baseNamespace;
+
+        if ($segments !== []) {
+            $namespace .= '\\' . implode('\\', $segments);
+        }
+
+        $directory = $this->basePath
+            . DIRECTORY_SEPARATOR
+            . str_replace('/', DIRECTORY_SEPARATOR, $baseDirectory);
+
+        if ($segments !== []) {
+            $directory .= DIRECTORY_SEPARATOR
+                . implode(DIRECTORY_SEPARATOR, $segments);
+        }
+
+        $filePath = $directory
+            . DIRECTORY_SEPARATOR
+            . $className
+            . '.php';
+
+        if (file_exists($filePath)) {
+            echo ucfirst($type) . " already exists: {$filePath}\n";
+            return 1;
+        }
+
+        if (
+            !is_dir($directory)
+            && !mkdir($directory, 0755, true)
+            && !is_dir($directory)
+        ) {
+            echo "Unable to create directory: {$directory}\n";
+            return 1;
+        }
+
+        if ($template === 'model') {
+            $content = <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace};
+
+use LocalPHP\\Model\\Model;
+
+class {$className} extends Model
+{
+    /**
+     * Database table associated with this model.
+     *
+     * Set this explicitly if your ORM does not infer table names.
+     */
+    protected string \$table = '{$this->modelTableName($className)}';
+}
+
+PHP;
+        } else {
+            $content = <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace};
+
+class {$className}
+{
+    /**
+     * Apply this filter to an array of data.
+     */
+    public function apply(array \$data): array
+    {
+        // Add your filtering logic here.
+
+        return \$data;
+    }
+}
+
+PHP;
+        }
+
+        if (file_put_contents($filePath, $content) === false) {
+            echo "Unable to write file: {$filePath}\n";
+            return 1;
+        }
+
+        echo "\033[32m" . ucfirst($type) . " created successfully!\033[0m\n";
+        echo "  File: {$filePath}\n";
+        echo "  Class: {$namespace}\\{$className}\n";
+
+        return 0;
+    }
+
+    /**
+     * Infer a basic table name from a model class name.
+     *
+     * Examples:
+     * User       -> users
+     * Product    -> products
+     * BlogPost   -> blog_posts
+     *
+     * This deliberately uses simple English pluralization.
+     * Override the table property for irregular table names.
+     */
+    private function modelTableName(string $className): string
+    {
+        $name = preg_replace('/(?<!^)[A-Z]/', '_$0', $className);
+        $name = strtolower($name ?? $className);
+
+        if (str_ends_with($name, 'y') && !preg_match('/[aeiou]y$/', $name)) {
+            return substr($name, 0, -1) . 'ies';
+        }
+
+        if (
+            str_ends_with($name, 's')
+            || str_ends_with($name, 'x')
+            || str_ends_with($name, 'ch')
+            || str_ends_with($name, 'sh')
+        ) {
+            return $name . 'es';
+        }
+
+        return $name . 's';
     }
 
 }
