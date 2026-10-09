@@ -1280,3 +1280,36 @@ php local optimize
 The cache is stored in `storage/cache/config.php` and is used by `config()`. After changing `.env` or files in `config/`, rebuild it with `php local config:cache`, or remove it with `php local config:clear`. `php local optimize:clear` clears cache files. PHP OPcache is a server-level optimization and must be enabled in the PHP configuration separately.
 
 Routes are currently registered from `routes/web.php` at application startup and are not serialized into a route cache; route closures make safe route serialization unsuitable without a dedicated route compiler. Avoid exposing `storage/` publicly and verify Apache honors `.htaccess` rules in deployment.
+
+## Query Builder
+
+LocalPHP provides a PDO-backed fluent query builder through `DB::table()` or `db()->table()`, and model queries through `Model::query()`. Values passed to normal query methods are parameter-bound. Table and column identifiers are validated; raw SQL methods must only contain developer-authored SQL.
+
+```php
+$users = db()->table('users')
+    ->select(['id', 'name', 'email'])
+    ->where('active', true)
+    ->where(function ($query) {
+        $query->where('role', 'admin')->orWhere('role', 'editor');
+    })
+    ->orderBy('name')
+    ->paginate(15, 1);
+
+$userId = db()->table('users')->insertGetId([
+    'name' => 'Example User',
+    'email' => 'example@example.com',
+]);
+
+$totals = db()->table('orders')
+    ->select('user_id')
+    ->selectRaw('SUM(total) AS total_spent')
+    ->groupBy('user_id')
+    ->having('total_spent', '>', 1000)
+    ->get();
+```
+
+Implemented Query Builder method groups include select/retrieval (`select`, `addSelect`, `selectRaw`, `distinct`, `get`, `first`, `find`, `value`, `pluck`); conditions (`where`, `orWhere`, `whereColumn`, `whereIn`, `whereNotIn`, `whereBetween`, `whereNotBetween`, null checks, date/time filters, LIKE and raw/nested/EXISTS conditions); joins (`join`, `leftJoin`, `rightJoin`, `crossJoin`, `joinSub`, `leftJoinSub`); grouping (`groupBy`, `groupByRaw`, `having`, `orHaving`, `havingRaw`); sorting and limits (`orderBy`, `orderByDesc`, `orderByRaw`, `latest`, `oldest`, `inRandomOrder`, `limit`, `take`, `offset`, `skip`, `forPage`); aggregates (`count`, `sum`, `avg`, `min`, `max`, `exists`, `doesntExist`); writes (`insert`, `insertGetId`, `insertOrIgnore`, `upsert`, `update`, `increment`, `decrement`, `delete`, `truncate`); pagination (`paginate`, `simplePaginate`, `chunk`); conditional methods (`when`, `unless`); and debugging (`toSql`, `getBindings`, `dump`, `dd`).
+
+`paginate($perPage, $page)` returns an array with `data`, `current_page`, `per_page`, `total`, `last_page`, `from`, and `to`. `simplePaginate()` returns `data`, `current_page`, `per_page`, and `has_more_pages`. `upsert()` uses MySQL's `ON DUPLICATE KEY UPDATE`; the database table must have a corresponding primary or unique key. `insertOrIgnore()` and `upsert()` are MySQL-specific in this release.
+
+Raw SQL is an explicit escape hatch. For example, `selectRaw('SUM(total) AS total', [])`, `whereRaw('score > ?', [$score])`, or `DB::raw('COUNT(*) AS total')`. Never concatenate request input into raw SQL. Use `DB::raw($sql, $bindings)` or `raw($sql, $bindings)` when passing a `RawExpression` to `select()`.

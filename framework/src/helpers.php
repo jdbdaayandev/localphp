@@ -404,3 +404,16 @@ if (!function_exists('db')) {
         );
     }
 }
+
+/*
+|--------------------------------------------------------------------------
+| Raw SQL Expression
+|--------------------------------------------------------------------------
+*/
+
+if (!function_exists('raw')) {
+    function raw(string $sql, array $bindings = []): \LocalPHP\Database\RawExpression
+    {
+        return new \LocalPHP\Database\RawExpression($sql, $bindings);
+    }
+}
