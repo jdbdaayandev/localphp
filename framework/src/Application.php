@@ -10,8 +10,6 @@ use LocalPHP\Http\Response;
 use LocalPHP\Routing\Router;
 use LocalPHP\Session\SessionManager;
 use LocalPHP\Database\DatabaseManager;
-use LocalPHP\Support\Environment;
-use InvalidArgumentException;
 
 class Application extends Container
 {
@@ -27,23 +25,6 @@ class Application extends Container
         $this->basePath =
             $basePath
             ?? dirname(__DIR__, 2);
-
-        // Load .env before any config file calls env().
-        Environment::load($this->basePath);
-
-        // Apply the configured timezone as part of application startup.
-        $timezone = (string) Environment::get(
-            'APP_TIMEZONE',
-            'UTC'
-        );
-
-        if (!in_array($timezone, timezone_identifiers_list(), true)) {
-            throw new InvalidArgumentException(
-                "Invalid APP_TIMEZONE value [{$timezone}]."
-            );
-        }
-
-        date_default_timezone_set($timezone);
 
         $GLOBALS['app'] = $this;
 
@@ -122,9 +103,31 @@ class Application extends Container
     public function handle(
         Request $request
     ): Response {
-        return $this->router->dispatch(
-            $request
-        );
+        // Protect state-changing requests by default; GET/HEAD/OPTIONS are read-only.
+        if (in_array($request->method(), ['POST', 'PUT', 'PATCH', 'DELETE'], true)) {
+            $provided = $request->input('_token')
+                ?? $request->header('X-CSRF-TOKEN')
+                ?? $request->header('X-XSRF-TOKEN');
+            $expected = session()->get('_csrf_token');
+
+            if (!is_string($expected) || !is_string($provided) || !hash_equals($expected, $provided)) {
+                if ($request->expectsJson()) {
+                    return response([
+                        'success' => false,
+                        'message' => 'CSRF token mismatch. Refresh the page and try again.',
+                        'error' => ['code' => 'CSRF_TOKEN_MISMATCH'],
+                    ], 419);
+                }
+
+                return new Response(
+                    '<h1>419 - Page Expired</h1><p>Your security token is missing or expired. Refresh the page and try again.</p>',
+                    419,
+                    ['Content-Type' => 'text/html; charset=UTF-8']
+                );
+            }
+        }
+
+        return $this->router->dispatch($request);
     }
 
     public function basePath(

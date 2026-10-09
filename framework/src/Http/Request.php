@@ -77,15 +77,28 @@ class Request
 
         $basePath = dirname($scriptName);
 
+        // When Apache internally rewrites to public/index.php, hide /public from URLs.
+        $basePath = preg_replace('~/public$~i', '', $basePath) ?? $basePath;
+
         if ($basePath === '\\' || $basePath === '.') {
             $basePath = '';
+        }
+
+                $input = $_POST;
+        $contentType = strtolower((string) ($_SERVER['CONTENT_TYPE'] ?? ''));
+        if (str_contains($contentType, 'application/json')) {
+            $raw = file_get_contents('php://input');
+            $decoded = json_decode($raw ?: '', true);
+            if (is_array($decoded)) {
+                $input = $decoded;
+            }
         }
 
         return new self(
             method: $_SERVER['REQUEST_METHOD'] ?? 'GET',
             uri: $path,
             query: $_GET,
-            input: $_POST,
+            input: $input,
             files: $_FILES,
             cookies: $_COOKIE,
             server: $_SERVER,
@@ -247,6 +260,23 @@ class Request
         }
 
         return $this->server[$key] ?? $default;
+    }
+
+    public function header(string $name, mixed $default = null): mixed
+    {
+        $key = 'HTTP_' . strtoupper(str_replace('-', '_', $name));
+        if (strtolower($name) === 'content-type') {
+            return $this->server['CONTENT_TYPE'] ?? $default;
+        }
+        return $this->server[$key] ?? $default;
+    }
+
+    public function expectsJson(): bool
+    {
+        $accept = (string) $this->header('Accept', '');
+        return str_contains(strtolower($accept), 'application/json')
+            || strtolower((string) $this->header('X-Requested-With', '')) === 'xmlhttprequest'
+            || str_contains(strtolower((string) $this->header('Content-Type', '')), 'application/json');
     }
 
     public function isMethod(

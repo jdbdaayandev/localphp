@@ -15,6 +15,18 @@ $router = $app->router();
 
 $app->router()->get('/', [HomeController::class, 'index']);
 
+
+// Lightweight health endpoint for local checks and deployment monitoring.
+$router->get('/health', function () {
+    return response([
+        'success' => true,
+        'status' => 'ok',
+        'framework' => 'LocalPHP',
+        'version' => app()->version(),
+    ]);
+});
+
+
 $router->get(
     '/hello',
     function () {

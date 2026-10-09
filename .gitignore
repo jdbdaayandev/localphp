@@ -7,5 +7,3 @@
 /storage/uploads/*
 
 !.gitkeep
-storage/logs/*.log
-storage/cache/config.php

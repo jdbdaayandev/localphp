@@ -1,20 +1,4 @@
-# Never expose environment files through Apache.
-<FilesMatch "^\.env(?:\..*)?$">
-    Require all denied
-</FilesMatch>
-
+# Forward application requests to public/ without exposing /public in URLs.
 RewriteEngine On
-
-# LocalPHP application directory
-RewriteBase /localphp/
-
-# Existing files
-RewriteCond %{REQUEST_FILENAME} -f
-RewriteRule ^ - [L]
-
-# Existing directories
-RewriteCond %{REQUEST_FILENAME} -d
-RewriteRule ^ - [L]
-
-# Everything else goes to LocalPHP
-RewriteRule ^ index.php [L]
+RewriteCond %{REQUEST_URI} !/public/
+RewriteRule ^(.*)$ public/$1 [L]

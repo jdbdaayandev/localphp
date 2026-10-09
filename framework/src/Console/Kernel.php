@@ -34,10 +34,7 @@ final class Kernel
             return match ($command) {
                 'list', 'help' => $this->listCommands(),
                 'about' => $this->about(),
-                'config:cache' => $this->cacheConfig(),
-                'config:clear' => $this->clearConfigCache(),
-                'optimize' => $this->optimize(),
-                'optimize:clear' => $this->clean(['cache']),
+                'serve' => $this->serve($arguments),
 
                 'make:migration' => $this->makeMigration(
                     $arguments[0] ?? ''
@@ -49,8 +46,6 @@ final class Kernel
                 'make:controller' => $this->makeController($argv[2] ?? ''),
                 'make:model' => $this->makeModel($argv[2] ?? ''),
                 'make:filter' => $this->makeFilter($argv[2] ?? ''),
-                'make:validator' => $this->makeValidator($arguments[0] ?? ''),
-                'make:middleware' => $this->makeMiddleware($arguments[0] ?? ''),
 
                 'make:seeder' => $this->makeSeeder(
                     $arguments[0] ?? ''
@@ -66,13 +61,21 @@ final class Kernel
                 default => $this->unknownCommand($command),
             };
         } catch (Throwable $exception) {
-            $debug = filter_var(env('APP_DEBUG', false), FILTER_VALIDATE_BOOLEAN);
+            fwrite(
+                STDERR,
+                'Error: ' . $exception->getMessage() . PHP_EOL
+            );
 
-            if ($debug) {
-                fwrite(STDERR, 'Error: ' . $exception->getMessage() . PHP_EOL);
-                fwrite(STDERR, $exception->getTraceAsString() . PHP_EOL);
-            } else {
-                fwrite(STDERR, 'Command failed. Check storage/logs or your server logs for details.' . PHP_EOL);
+            if (
+                filter_var(
+                    env('APP_DEBUG', false),
+                    FILTER_VALIDATE_BOOLEAN
+                )
+            ) {
+                fwrite(
+                    STDERR,
+                    $exception->getTraceAsString() . PHP_EOL
+                );
             }
 
             return 1;
@@ -137,10 +140,7 @@ final class Kernel
         $commands = [
             'list' => 'Display available commands',
             'about' => 'Display framework information',
-            'config:cache' => 'Compile configuration into a cache file',
-            'config:clear' => 'Remove the compiled configuration cache',
-            'optimize' => 'Prepare configuration cache for production',
-            'optimize:clear' => 'Clear framework optimization cache',
+            'serve [host:port]' => 'Start the built-in PHP development server',
             'make:migration <name>' => 'Create a migration',
             'migrate' => 'Run pending migrations',
             'migrate:status' => 'Show migration status',
@@ -154,8 +154,6 @@ final class Kernel
             'make:controller' => 'Create a new controller',
             'make:model'  => 'Create a new model',
             'make:filter' => 'Create a new filter',
-            'make:validator <Name>' => 'Create a reusable validator class',
-            'make:middleware <Name>' => 'Create middleware class',
         ];
 
         foreach ($commands as $name => $description) {
@@ -165,6 +163,28 @@ final class Kernel
         echo PHP_EOL;
 
         return 0;
+    }
+
+    /** Start PHP's development server with public/ as its document root. */
+    private function serve(array $arguments): int
+    {
+        $address = $arguments[0] ?? '127.0.0.1:8000';
+        if (!preg_match('/^[a-zA-Z0-9.\-]+:[0-9]{1,5}$/', $address)) {
+            throw new RuntimeException('Use host:port, for example 127.0.0.1:8000.');
+        }
+        $publicPath = $this->basePath . DIRECTORY_SEPARATOR . 'public';
+        if (!is_dir($publicPath) || !is_file($publicPath . DIRECTORY_SEPARATOR . 'index.php')) {
+            throw new RuntimeException('The public directory or public/index.php is missing.');
+        }
+        // Use index.php as the built-in server router and front controller.
+        // This keeps routing logic in one file and avoids a separate router.php.
+        $frontController = $publicPath . DIRECTORY_SEPARATOR . 'index.php';
+        $command = escapeshellarg(PHP_BINARY) . ' -S ' . escapeshellarg($address)
+            . ' -t ' . escapeshellarg($publicPath) . ' ' . escapeshellarg($frontController);
+        echo 'LocalPHP server: http://' . $address . PHP_EOL;
+        echo 'Document root: ' . $publicPath . PHP_EOL;
+        passthru($command, $exitCode);
+        return (int) $exitCode;
     }
 
     /**
@@ -265,32 +285,6 @@ PHP;
         return 0;
     }
 
-    private function makeValidator(string $name): int
-    {
-        $name = $this->validateClassName($name, 'validator');
-        $directory = $this->basePath . '/app/Validators'; $this->ensureDirectory($directory);
-        $path = $directory . '/' . $name . 'Validator.php';
-        $strict = filter_var(env('APP_STRICT_TYPES', true), FILTER_VALIDATE_BOOLEAN) ? "declare(strict_types=1);\n\n" : '';
-        $code = "<?php\n\n{$strict}namespace App\\Validators;\n\nfinal class {$name}Validator\n{\n    public function rules(): array\n    {\n        return [\n            // 'name' => 'required|string|min:2|max:100',\n        ];\n    }\n}\n";
-        $this->writeFile($path, $code); echo "Created validator: app/Validators/{$name}Validator.php" . PHP_EOL; return 0;
-    }
-
-    private function makeMiddleware(string $name): int
-    {
-        $name = $this->validateClassName($name, 'middleware');
-        $directory = $this->basePath . '/app/Middleware'; $this->ensureDirectory($directory);
-        $path = $directory . '/' . $name . 'Middleware.php';
-        $strict = filter_var(env('APP_STRICT_TYPES', true), FILTER_VALIDATE_BOOLEAN) ? "declare(strict_types=1);\n\n" : '';
-        $code = "<?php\n\n{$strict}namespace App\\Middleware;\n\nuse LocalPHP\\Http\\Request;\nuse LocalPHP\\Http\\Response;\n\nfinal class {$name}Middleware\n{\n    public function handle(Request \$request, callable \$next): Response\n    {\n        return \$next(\$request);\n    }\n}\n";
-        $this->writeFile($path, $code); echo "Created middleware: app/Middleware/{$name}Middleware.php" . PHP_EOL; return 0;
-    }
-
-    private function validateClassName(string $name, string $type): string
-    {
-        if (!preg_match('/^[A-Z][A-Za-z0-9]*$/', $name)) throw new RuntimeException(ucfirst($type) . ' name must be PascalCase.');
-        return $name;
-    }
-
     /**
      * Generate a seeder file.
      */
@@ -375,52 +369,6 @@ PHP;
 
         echo "Seeded: {$name}" . PHP_EOL;
 
-        return 0;
-    }
-
-    /** Compile config/*.php into a production cache. */
-    private function cacheConfig(): int
-    {
-        $config = [];
-        $files = glob($this->basePath . DIRECTORY_SEPARATOR . 'config' . DIRECTORY_SEPARATOR . '*.php') ?: [];
-        foreach ($files as $file) {
-            $name = basename($file, '.php');
-            $value = require $file;
-            if (!is_array($value)) {
-                throw new RuntimeException("Configuration file [{$file}] must return an array.");
-            }
-            $config[$name] = $value;
-        }
-
-        $directory = $this->basePath . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'cache';
-        $this->ensureDirectory($directory);
-        $path = $directory . DIRECTORY_SEPARATOR . 'config.php';
-        $contents = "<?php\n\ndeclare(strict_types=1);\n\nreturn " . var_export($config, true) . ";\n";
-        if (file_put_contents($path, $contents, LOCK_EX) === false) {
-            throw new RuntimeException('Unable to write configuration cache.');
-        }
-        echo "Configuration cached: storage/cache/config.php" . PHP_EOL;
-        return 0;
-    }
-
-    private function clearConfigCache(): int
-    {
-        $path = $this->basePath . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'cache' . DIRECTORY_SEPARATOR . 'config.php';
-        if (is_file($path) && !unlink($path)) {
-            throw new RuntimeException('Unable to remove configuration cache.');
-        }
-        echo is_file($path) ? "Configuration cache could not be cleared." . PHP_EOL : "Configuration cache cleared." . PHP_EOL;
-        return 0;
-    }
-
-    private function optimize(): int
-    {
-        $result = $this->cacheConfig();
-        if ($result !== 0) {
-            return $result;
-        }
-        echo "LocalPHP production configuration optimization complete." . PHP_EOL;
-        echo "Note: PHP OPcache should be enabled in your PHP/server configuration for bytecode caching." . PHP_EOL;
         return 0;
     }
 

@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 use LocalPHP\Http\Request;
 use LocalPHP\Http\Response;
-use LocalPHP\Support\Environment;
 use LocalPHP\Session\SessionManager;
 use LocalPHP\View\View;
 
@@ -41,7 +40,99 @@ if (!function_exists('env')) {
         string $key,
         mixed $default = null
     ): mixed {
-        return Environment::get($key, $default);
+        static $loaded = false;
+        static $values = [];
+
+        if (!$loaded) {
+            $file = dirname(
+                __DIR__,
+                2
+            ) . DIRECTORY_SEPARATOR . '.env';
+
+            if (file_exists($file)) {
+                $lines = file(
+                    $file,
+                    FILE_IGNORE_NEW_LINES |
+                    FILE_SKIP_EMPTY_LINES
+                );
+
+                foreach ($lines as $line) {
+                    $line = trim($line);
+
+                    if (
+                        $line === '' ||
+                        str_starts_with(
+                            $line,
+                            '#'
+                        )
+                    ) {
+                        continue;
+                    }
+
+                    if (!str_contains(
+                        $line,
+                        '='
+                    )) {
+                        continue;
+                    }
+
+                    [
+                        $name,
+                        $value
+                    ] = explode(
+                        '=',
+                        $line,
+                        2
+                    );
+
+                    $name = trim($name);
+                    $value = trim($value);
+
+                    if (
+                        strlen($value) >= 2 &&
+                        (
+                            (
+                                $value[0] === '"' &&
+                                $value[-1] === '"'
+                            ) ||
+                            (
+                                $value[0] === "'" &&
+                                $value[-1] === "'"
+                            )
+                        )
+                    ) {
+                        $value = substr(
+                            $value,
+                            1,
+                            -1
+                        );
+                    }
+
+                    $values[$name] = $value;
+                }
+            }
+
+            $loaded = true;
+        }
+
+        $value = $values[$key]
+            ?? $_ENV[$key]
+            ?? $_SERVER[$key]
+            ?? $default;
+
+        if ($value === 'true') {
+            return true;
+        }
+
+        if ($value === 'false') {
+            return false;
+        }
+
+        if ($value === 'null') {
+            return null;
+        }
+
+        return $value;
     }
 }
 
@@ -56,29 +147,27 @@ if (!function_exists('config')) {
         ?string $key = null,
         mixed $default = null
     ): mixed {
-        static $configuration = null;
+        static $configuration = [];
 
-        if ($configuration === null) {
+        if (empty($configuration)) {
             $basePath = app()->basePath();
-            $cacheFile = $basePath
-                . DIRECTORY_SEPARATOR . 'storage'
-                . DIRECTORY_SEPARATOR . 'cache'
-                . DIRECTORY_SEPARATOR . 'config.php';
 
-            if (is_file($cacheFile)) {
-                $cached = require $cacheFile;
-                $configuration = is_array($cached) ? $cached : [];
-            } else {
-                $configuration = [];
-                $files = glob(
-                    $basePath . DIRECTORY_SEPARATOR . 'config' . DIRECTORY_SEPARATOR . '*.php'
-                ) ?: [];
+            $files = glob(
+                $basePath .
+                DIRECTORY_SEPARATOR .
+                'config' .
+                DIRECTORY_SEPARATOR .
+                '*.php'
+            ) ?: [];
 
-                foreach ($files as $file) {
-                    $name = basename($file, '.php');
-                    $loaded = require $file;
-                    $configuration[$name] = is_array($loaded) ? $loaded : [];
-                }
+            foreach ($files as $file) {
+                $name = basename(
+                    $file,
+                    '.php'
+                );
+
+                $configuration[$name] =
+                    require $file;
             }
         }
 
@@ -160,12 +249,42 @@ if (!function_exists('response')) {
             $content = json_encode(
                 $content,
                 JSON_PRETTY_PRINT |
-                JSON_UNESCAPED_SLASHES
+                JSON_UNESCAPED_SLASHES |
+                JSON_UNESCAPED_UNICODE |
+                JSON_THROW_ON_ERROR
             );
         }
 
         return new Response(
             (string) $content,
+            $status,
+            $headers
+        );
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| JSON Response
+|--------------------------------------------------------------------------
+*/
+
+if (!function_exists('json')) {
+    /** Return a JSON response with a status code and optional headers. */
+    function json(
+        mixed $data,
+        int $status = 200,
+        array $headers = []
+    ): Response {
+        $headers['Content-Type'] = 'application/json; charset=UTF-8';
+
+        return new Response(
+            json_encode(
+                $data,
+                JSON_UNESCAPED_SLASHES |
+                JSON_UNESCAPED_UNICODE |
+                JSON_THROW_ON_ERROR
+            ),
             $status,
             $headers
         );
@@ -217,13 +336,23 @@ if (!function_exists('base_url')) {
     function base_url(
         string $path = ''
     ): string {
-        $base = rtrim(
-            (string) config(
-                'app.url',
-                ''
-            ),
-            '/'
-        );
+        // The built-in server has its own host/port and serves public/ directly.
+        if (PHP_SAPI === 'cli-server' && !empty($_SERVER['HTTP_HOST'])) {
+            $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+                ? 'https' : 'http';
+            $base = $scheme . '://' . $_SERVER['HTTP_HOST'];
+        } else {
+            $base = rtrim(
+                (string) config(
+                    'app.url',
+                    ''
+                ),
+                '/'
+            );
+        }
+
+        // The public directory is a document root, never part of a public URL.
+        $base = preg_replace('~/public$~i', '', $base) ?? $base;
 
         if ($path === '') {
             return $base;
@@ -380,6 +509,21 @@ if (!function_exists('csrf_field')) {
 
 /*
 |--------------------------------------------------------------------------
+| CSRF Meta Tag
+|--------------------------------------------------------------------------
+*/
+
+if (!function_exists('csrf_meta')) {
+    function csrf_meta(): string
+    {
+        return '<meta name="csrf-token" content="' . htmlspecialchars(
+            csrf_token(), ENT_QUOTES, 'UTF-8'
+        ) . '">';
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
 | Old Input
 |--------------------------------------------------------------------------
 */
@@ -402,33 +546,5 @@ if (!function_exists('db')) {
         return app(
             \LocalPHP\Database\DatabaseManager::class
         );
-    }
-}
-
-/*
-|--------------------------------------------------------------------------
-| Raw SQL Expression
-|--------------------------------------------------------------------------
-*/
-
-if (!function_exists('raw')) {
-    function raw(string $sql, array $bindings = []): \LocalPHP\Database\RawExpression
-    {
-        return new \LocalPHP\Database\RawExpression($sql, $bindings);
-    }
-}
-
-
-/* Validation */
-if (!function_exists('validator')) {
-    function validator(array $data, array $rules, array $messages = []): \LocalPHP\Validation\Validator
-    {
-        return \LocalPHP\Validation\Validator::make($data, $rules, $messages);
-    }
-}
-if (!function_exists('validate')) {
-    function validate(array $data, array $rules, array $messages = []): array
-    {
-        return validator($data, $rules, $messages)->validated();
     }
 }

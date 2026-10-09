@@ -1,13 +1,10 @@
 <?php
 
 use LocalPHP\Console\Kernel;
-use LocalPHP\Support\Environment;
 
 $basePath = __DIR__;
 
 require $basePath . '/vendor/autoload.php';
-
-Environment::load($basePath);
 
 $kernel = new Kernel($basePath);
 

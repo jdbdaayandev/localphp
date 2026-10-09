@@ -12,8 +12,6 @@ use RuntimeException;
 class Router
 {
     protected RouteCollection $routes;
-    protected string $groupPrefix = '';
-    protected array $groupMiddleware = [];
 
     public function __construct()
     {
@@ -64,25 +62,11 @@ class Router
         );
     }
 
-    public function patch(string $uri, mixed $action): Route { return $this->addRoute('PATCH', $uri, $action); }
-
-    public function any(string $uri, mixed $action): Route
-    {
-        $first = null;
-        foreach (['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as $method) {
-            $route = $this->addRoute($method, $uri, $action);
-            $first ??= $route;
-        }
-        return $first;
-    }
-
     public function addRoute(
         string $method,
         string $uri,
         mixed $action
     ): Route {
-        $uri = '/' . trim($this->groupPrefix . '/' . trim($uri, '/'), '/');
-        if ($uri === '') $uri = '/';
         return $this->routes->add(
             new Route(
                 method: $method,
@@ -100,12 +84,22 @@ class Router
         );
 
         if ($route === null) {
+            if ($request->expectsJson()) {
+                return new Response(
+                    json_encode([
+                        'success' => false,
+                        'message' => 'The requested resource was not found.',
+                        'error' => ['code' => 'NOT_FOUND'],
+                    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+                    404,
+                    ['Content-Type' => 'application/json; charset=UTF-8']
+                );
+            }
+
             return new Response(
                 '<h1>404 - Page Not Found</h1>',
                 404,
-                [
-                    'Content-Type' => 'text/html; charset=UTF-8'
-                ]
+                ['Content-Type' => 'text/html; charset=UTF-8']
             );
         }
 
@@ -184,39 +178,17 @@ class Router
             return new Response(
                 json_encode(
                     $result,
-                    JSON_PRETTY_PRINT
+                    JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR
                 ),
                 200,
                 [
                     'Content-Type' =>
-                        'application/json'
+                        'application/json; charset=UTF-8'
                 ]
             );
         }
 
         return new Response('');
-    }
-
-    public function group(array $attributes, callable $callback): void
-    {
-        $oldPrefix = $this->groupPrefix; $oldMiddleware = $this->groupMiddleware;
-        $this->groupPrefix = trim($oldPrefix . '/' . trim((string)($attributes['prefix'] ?? ''), '/'), '/');
-        $this->groupMiddleware = array_merge($oldMiddleware, (array)($attributes['middleware'] ?? []));
-        try { $callback($this); } finally { $this->groupPrefix = $oldPrefix; $this->groupMiddleware = $oldMiddleware; }
-    }
-
-    public function urlFor(string $name, array $parameters = []): string
-    {
-        foreach ($this->routes->all() as $route) {
-            if ($route->getName() !== $name) continue;
-            $uri = $route->uri();
-            $uri = preg_replace_callback('/\\{([^}]+)\\}/', function ($m) use (&$parameters) {
-                if (!array_key_exists($m[1], $parameters)) throw new RuntimeException("Missing route parameter [{$m[1]}].");
-                $value = rawurlencode((string)$parameters[$m[1]]); unset($parameters[$m[1]]); return $value;
-            }, $uri);
-            return $uri . ($parameters ? '?' . http_build_query($parameters) : '');
-        }
-        throw new RuntimeException("Named route [{$name}] not found.");
     }
 
     public function routes(): RouteCollection
