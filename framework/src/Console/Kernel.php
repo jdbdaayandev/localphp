@@ -49,6 +49,8 @@ final class Kernel
                 'make:controller' => $this->makeController($argv[2] ?? ''),
                 'make:model' => $this->makeModel($argv[2] ?? ''),
                 'make:filter' => $this->makeFilter($argv[2] ?? ''),
+                'make:validator' => $this->makeValidator($arguments[0] ?? ''),
+                'make:middleware' => $this->makeMiddleware($arguments[0] ?? ''),
 
                 'make:seeder' => $this->makeSeeder(
                     $arguments[0] ?? ''
@@ -152,6 +154,8 @@ final class Kernel
             'make:controller' => 'Create a new controller',
             'make:model'  => 'Create a new model',
             'make:filter' => 'Create a new filter',
+            'make:validator <Name>' => 'Create a reusable validator class',
+            'make:middleware <Name>' => 'Create middleware class',
         ];
 
         foreach ($commands as $name => $description) {
@@ -259,6 +263,32 @@ PHP;
             . PHP_EOL;
 
         return 0;
+    }
+
+    private function makeValidator(string $name): int
+    {
+        $name = $this->validateClassName($name, 'validator');
+        $directory = $this->basePath . '/app/Validators'; $this->ensureDirectory($directory);
+        $path = $directory . '/' . $name . 'Validator.php';
+        $strict = filter_var(env('APP_STRICT_TYPES', true), FILTER_VALIDATE_BOOLEAN) ? "declare(strict_types=1);\n\n" : '';
+        $code = "<?php\n\n{$strict}namespace App\\Validators;\n\nfinal class {$name}Validator\n{\n    public function rules(): array\n    {\n        return [\n            // 'name' => 'required|string|min:2|max:100',\n        ];\n    }\n}\n";
+        $this->writeFile($path, $code); echo "Created validator: app/Validators/{$name}Validator.php" . PHP_EOL; return 0;
+    }
+
+    private function makeMiddleware(string $name): int
+    {
+        $name = $this->validateClassName($name, 'middleware');
+        $directory = $this->basePath . '/app/Middleware'; $this->ensureDirectory($directory);
+        $path = $directory . '/' . $name . 'Middleware.php';
+        $strict = filter_var(env('APP_STRICT_TYPES', true), FILTER_VALIDATE_BOOLEAN) ? "declare(strict_types=1);\n\n" : '';
+        $code = "<?php\n\n{$strict}namespace App\\Middleware;\n\nuse LocalPHP\\Http\\Request;\nuse LocalPHP\\Http\\Response;\n\nfinal class {$name}Middleware\n{\n    public function handle(Request \$request, callable \$next): Response\n    {\n        return \$next(\$request);\n    }\n}\n";
+        $this->writeFile($path, $code); echo "Created middleware: app/Middleware/{$name}Middleware.php" . PHP_EOL; return 0;
+    }
+
+    private function validateClassName(string $name, string $type): string
+    {
+        if (!preg_match('/^[A-Z][A-Za-z0-9]*$/', $name)) throw new RuntimeException(ucfirst($type) . ' name must be PascalCase.');
+        return $name;
     }
 
     /**

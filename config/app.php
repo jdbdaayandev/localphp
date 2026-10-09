@@ -65,6 +65,10 @@ return [
         'Asia/Manila'
     ),
 
+    // PHP strict_types is a per-file declaration, not a runtime switch.
+    // This setting controls generated application files and conventions.
+    'strict_types' => filter_var(env('APP_STRICT_TYPES', true), FILTER_VALIDATE_BOOLEAN),
+
     'maintenance' => filter_var(env('APP_MAINTENANCE', false), FILTER_VALIDATE_BOOLEAN),
 
     'log_level' => env('LOG_LEVEL', 'error'),

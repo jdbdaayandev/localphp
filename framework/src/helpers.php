@@ -417,3 +417,18 @@ if (!function_exists('raw')) {
         return new \LocalPHP\Database\RawExpression($sql, $bindings);
     }
 }
+
+
+/* Validation */
+if (!function_exists('validator')) {
+    function validator(array $data, array $rules, array $messages = []): \LocalPHP\Validation\Validator
+    {
+        return \LocalPHP\Validation\Validator::make($data, $rules, $messages);
+    }
+}
+if (!function_exists('validate')) {
+    function validate(array $data, array $rules, array $messages = []): array
+    {
+        return validator($data, $rules, $messages)->validated();
+    }
+}
