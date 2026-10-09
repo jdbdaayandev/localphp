@@ -1,0 +1,18 @@
+{
+    "name": "localphp/framework",
+    "description": "A lightweight PHP framework designed for localhost development.",
+    "type": "project",
+    "license": "MIT",
+    "require": {
+        "php": "^8.2"
+    },
+    "autoload": {
+        "psr-4": {
+            "LocalPHP\\": "framework/src/",
+            "App\\": "app/"
+        },
+        "files": [
+            "framework/src/helpers.php"
+        ]
+    }
+}

@@ -1,0 +1,588 @@
+<?php
+
+declare(strict_types=1);
+
+namespace LocalPHP\Console;
+
+use LocalPHP\Database\MigrationManager;
+use LocalPHP\Database\Seeder;
+use PDO;
+use RuntimeException;
+use Throwable;
+use FilesystemIterator;
+
+final class Kernel
+{
+    private ?PDO $pdo = null;
+
+    public function __construct(
+        private readonly string $basePath
+    ) {
+        // Database connection is lazy.
+        // Non-database commands can run without MySQL.
+    }
+
+    /**
+     * Run a CLI command.
+     */
+    public function run(array $argv): int
+    {
+        $command = $argv[1] ?? 'list';
+        $arguments = array_slice($argv, 2);
+
+        try {
+            return match ($command) {
+                'list', 'help' => $this->listCommands(),
+                'about' => $this->about(),
+
+                'make:migration' => $this->makeMigration(
+                    $arguments[0] ?? ''
+                ),
+                'migrate' => $this->migrations()->migrate() >= 0 ? 0 : 1,
+                'migrate:status' => $this->showMigrationStatus(),
+                'migrate:rollback' => $this->rollback(),
+                'migrate:fresh' => $this->fresh($arguments),
+                'make:controller' => $this->makeController($argv[2] ?? ''),
+
+                'make:seeder' => $this->makeSeeder(
+                    $arguments[0] ?? ''
+                ),
+                'db:seed' => $this->seed(
+                    $arguments[0] ?? null
+                ),
+
+                'clean' => $this->clean(['cache', 'logs']),
+                'clean:cache' => $this->clean(['cache']),
+                'clean:logs' => $this->clean(['logs']),
+
+                default => $this->unknownCommand($command),
+            };
+        } catch (Throwable $exception) {
+            fwrite(
+                STDERR,
+                'Error: ' . $exception->getMessage() . PHP_EOL
+            );
+
+            if (
+                filter_var(
+                    env('APP_DEBUG', false),
+                    FILTER_VALIDATE_BOOLEAN
+                )
+            ) {
+                fwrite(
+                    STDERR,
+                    $exception->getTraceAsString() . PHP_EOL
+                );
+            }
+
+            return 1;
+        }
+    }
+
+    /**
+     * Connect to MySQL only when needed.
+     */
+    private function database(): PDO
+    {
+        if ($this->pdo instanceof PDO) {
+            return $this->pdo;
+        }
+
+        $driver = (string) env('DB_CONNECTION', 'mysql');
+
+        if ($driver !== 'mysql') {
+            throw new RuntimeException(
+                "Unsupported database driver [{$driver}]. "
+                . 'Only MySQL/MariaDB is currently supported.'
+            );
+        }
+
+        $host = (string) env('DB_HOST', '127.0.0.1');
+        $port = (string) env('DB_PORT', '3306');
+        $database = (string) env('DB_DATABASE', 'localphp');
+        $username = (string) env('DB_USERNAME', 'root');
+        $password = (string) env('DB_PASSWORD', '');
+        $charset = (string) env('DB_CHARSET', 'utf8mb4');
+
+        $dsn = "mysql:host={$host};port={$port};dbname={$database};charset={$charset}";
+
+        try {
+            $this->pdo = new PDO($dsn, $username, $password, [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_EMULATE_PREPARES => false,
+            ]);
+        } catch (\PDOException $exception) {
+            throw new RuntimeException(
+                'Unable to connect to MySQL. Check that MySQL is running '
+                . 'in Laragon and verify DB_HOST, DB_PORT, DB_DATABASE, '
+                . 'DB_USERNAME, and DB_PASSWORD in your .env file.',
+                0,
+                $exception
+            );
+        }
+
+        return $this->pdo;
+    }
+
+    /**
+     * Display available commands.
+     */
+    private function listCommands(): int
+    {
+        echo PHP_EOL;
+        echo "LocalPHP Console" . PHP_EOL;
+        echo "Usage: php local <command>" . PHP_EOL . PHP_EOL;
+
+        $commands = [
+            'list' => 'Display available commands',
+            'about' => 'Display framework information',
+            'make:migration <name>' => 'Create a migration',
+            'migrate' => 'Run pending migrations',
+            'migrate:status' => 'Show migration status',
+            'migrate:rollback' => 'Roll back the latest batch',
+            'migrate:fresh --force' => 'Drop tables and rerun migrations',
+            'make:seeder <Name>' => 'Create a seeder',
+            'db:seed [Name]' => 'Run a seeder',
+            'clean' => 'Clear cache and logs',
+            'clean:cache' => 'Clear cache files',
+            'clean:logs' => 'Clear log files',
+            'make:controller' => 'Create a new controller',
+        ];
+
+        foreach ($commands as $name => $description) {
+            echo '  ' . str_pad($name, 32) . $description . PHP_EOL;
+        }
+
+        echo PHP_EOL;
+
+        return 0;
+    }
+
+    /**
+     * Display framework information.
+     */
+    private function about(): int
+    {
+        echo "Framework: LocalPHP" . PHP_EOL;
+        echo "PHP version: " . PHP_VERSION . PHP_EOL;
+        echo "Project path: " . $this->basePath . PHP_EOL;
+
+        return 0;
+    }
+
+    /**
+     * Create the migration manager.
+     */
+    private function migrations(): MigrationManager
+    {
+        return new MigrationManager(
+            $this->database(),
+            $this->basePath
+            . DIRECTORY_SEPARATOR . 'database'
+            . DIRECTORY_SEPARATOR . 'migrations'
+        );
+    }
+
+    private function showMigrationStatus(): int
+    {
+        $this->migrations()->status();
+
+        return 0;
+    }
+
+    private function rollback(): int
+    {
+        $this->migrations()->rollback();
+
+        return 0;
+    }
+
+    private function fresh(array $arguments): int
+    {
+        $force = in_array('--force', $arguments, true);
+
+        $this->migrations()->fresh($force);
+
+        return $force ? 0 : 1;
+    }
+
+    /**
+     * Generate a migration file.
+     */
+    private function makeMigration(string $name): int
+    {
+        $name = $this->validateName($name, 'migration');
+
+        $directory = $this->basePath
+            . DIRECTORY_SEPARATOR . 'database'
+            . DIRECTORY_SEPARATOR . 'migrations';
+
+        $this->ensureDirectory($directory);
+
+        $filename = date('Y_m_d_His') . '_' . $name . '.php';
+        $path = $directory . DIRECTORY_SEPARATOR . $filename;
+
+        if (file_exists($path)) {
+            throw new RuntimeException(
+                "Migration [{$filename}] already exists."
+            );
+        }
+
+        $contents = <<<'PHP'
+<?php
+
+declare(strict_types=1);
+
+use LocalPHP\Database\Migration;
+
+return new class extends Migration {
+    public function up(PDO $pdo): void
+    {
+        // Add database changes here.
+    }
+
+    public function down(PDO $pdo): void
+    {
+        // Reverse the changes made in up().
+    }
+};
+PHP;
+
+        $this->writeFile($path, $contents);
+
+        echo "Created migration: database/migrations/{$filename}"
+            . PHP_EOL;
+
+        return 0;
+    }
+
+    /**
+     * Generate a seeder file.
+     */
+    private function makeSeeder(string $name): int
+    {
+        if (!preg_match('/^[A-Z][A-Za-z0-9]*Seeder$/', $name)) {
+            throw new RuntimeException(
+                'Seeder name must be PascalCase and end with Seeder. '
+                . 'Example: UserSeeder.'
+            );
+        }
+
+        $directory = $this->basePath
+            . DIRECTORY_SEPARATOR . 'database'
+            . DIRECTORY_SEPARATOR . 'seeders';
+
+        $this->ensureDirectory($directory);
+
+        $path = $directory . DIRECTORY_SEPARATOR . $name . '.php';
+
+        if (file_exists($path)) {
+            throw new RuntimeException(
+                "Seeder [{$name}] already exists."
+            );
+        }
+
+        $contents = <<<'PHP'
+<?php
+
+declare(strict_types=1);
+
+use LocalPHP\Database\Seeder;
+
+return new class extends Seeder {
+    public function run(PDO $pdo): void
+    {
+        // Add seed data here.
+    }
+};
+PHP;
+
+        $this->writeFile($path, $contents);
+
+        echo "Created seeder: database/seeders/{$name}.php"
+            . PHP_EOL;
+
+        return 0;
+    }
+
+    /**
+     * Execute a seeder.
+     */
+    private function seed(?string $name = null): int
+    {
+        $name ??= 'DatabaseSeeder';
+
+        if (!preg_match('/^[A-Z][A-Za-z0-9]*Seeder$/', $name)) {
+            throw new RuntimeException('Invalid seeder name.');
+        }
+
+        $path = $this->basePath
+            . DIRECTORY_SEPARATOR . 'database'
+            . DIRECTORY_SEPARATOR . 'seeders'
+            . DIRECTORY_SEPARATOR . $name . '.php';
+
+        if (!is_file($path)) {
+            throw new RuntimeException(
+                "Seeder [{$name}] not found."
+            );
+        }
+
+        $seeder = require $path;
+
+        if (!$seeder instanceof Seeder) {
+            throw new RuntimeException(
+                "Seeder [{$name}] must return an instance of "
+                . Seeder::class . '.'
+            );
+        }
+
+        $seeder->run($this->database());
+
+        echo "Seeded: {$name}" . PHP_EOL;
+
+        return 0;
+    }
+
+    /**
+     * Clear files from approved storage directories.
+     */
+    private function clean(array $targets): int
+    {
+        foreach ($targets as $target) {
+            if (!in_array($target, ['cache', 'logs'], true)) {
+                throw new RuntimeException(
+                    "Invalid cleanup target [{$target}]."
+                );
+            }
+
+            $directory = $this->basePath
+                . DIRECTORY_SEPARATOR . 'storage'
+                . DIRECTORY_SEPARATOR . $target;
+
+            if (!is_dir($directory)) {
+                echo "Skipped missing directory: storage/{$target}"
+                    . PHP_EOL;
+                continue;
+            }
+
+            $removed = $this->clearDirectory($directory);
+
+            echo "Cleaned storage/{$target}: {$removed} item(s)."
+                . PHP_EOL;
+        }
+
+        return 0;
+    }
+
+    private function clearDirectory(string $directory): int
+    {
+        $removed = 0;
+
+        foreach (
+            new FilesystemIterator(
+                $directory,
+                FilesystemIterator::SKIP_DOTS
+            ) as $item
+        ) {
+            $path = $item->getPathname();
+
+            if ($item->isDir() && !$item->isLink()) {
+                $removed += $this->clearDirectory($path);
+
+                if (!rmdir($path)) {
+                    throw new RuntimeException(
+                        "Unable to remove directory: {$path}"
+                    );
+                }
+
+                $removed++;
+                continue;
+            }
+
+            if (!unlink($path)) {
+                throw new RuntimeException(
+                    "Unable to remove file: {$path}"
+                );
+            }
+
+            $removed++;
+        }
+
+        return $removed;
+    }
+
+    private function ensureDirectory(string $directory): void
+    {
+        if (
+            !is_dir($directory)
+            && !mkdir($directory, 0775, true)
+            && !is_dir($directory)
+        ) {
+            throw new RuntimeException(
+                "Unable to create directory: {$directory}"
+            );
+        }
+    }
+
+    private function writeFile(string $path, string $contents): void
+    {
+        if (file_put_contents($path, $contents . PHP_EOL) === false) {
+            throw new RuntimeException(
+                "Unable to write file: {$path}"
+            );
+        }
+    }
+
+    private function validateName(
+        string $name,
+        string $type
+    ): string {
+        if (
+            $name === ''
+            || !preg_match('/^[A-Za-z][A-Za-z0-9_-]*$/', $name)
+        ) {
+            throw new RuntimeException(
+                "Provide a valid {$type} name using letters, numbers, "
+                . 'underscores, and hyphens.'
+            );
+        }
+
+        return $name;
+    }
+
+    private function unknownCommand(string $command): int
+    {
+        fwrite(
+            STDERR,
+            "Unknown command: {$command}" . PHP_EOL
+        );
+
+        $this->listCommands();
+
+        return 1;
+    }
+
+    /**
+     * Create a new controller.
+     *
+     * Usage:
+     * php local make:controller HomeController
+     * php local make:controller HomeController2
+     * php local make:controller Admin/DashboardController
+     */
+    private function makeController(string $name): int
+    {
+        $name = trim(str_replace('\\', '/', $name), '/');
+
+        if ($name === '') {
+            echo "Controller name is required.\n\n";
+            echo "Usage:\n";
+            echo "  php local make:controller HomeController\n";
+            echo "  php local make:controller HomeController2\n";
+            echo "  php local make:controller Admin/DashboardController\n";
+
+            return 1;
+        }
+
+        $segments = explode('/', $name);
+
+        foreach ($segments as $segment) {
+            if (
+                $segment === ''
+                || !preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $segment)
+            ) {
+                echo "Invalid controller name: {$name}\n";
+                return 1;
+            }
+        }
+
+        $lastIndex = count($segments) - 1;
+        $className = $segments[$lastIndex];
+
+        /*
+        * Append Controller only when the name does not
+        * already contain the Controller suffix.
+        *
+        * Examples:
+        * Home       -> HomeController
+        * HomeController -> HomeController
+        * HomeController2 -> HomeController2
+        */
+        if (!preg_match('/Controller\d*$/', $className)) {
+            $className .= 'Controller';
+        }
+
+        $segments[$lastIndex] = $className;
+
+        $className = array_pop($segments);
+
+        $namespace = 'App\\Controllers';
+
+        if ($segments !== []) {
+            $namespace .= '\\' . implode('\\', $segments);
+        }
+
+        $directory = $this->basePath
+            . DIRECTORY_SEPARATOR . 'app'
+            . DIRECTORY_SEPARATOR . 'Controllers';
+
+        if ($segments !== []) {
+            $directory .= DIRECTORY_SEPARATOR
+                . implode(DIRECTORY_SEPARATOR, $segments);
+        }
+
+        $filePath = $directory
+            . DIRECTORY_SEPARATOR
+            . $className
+            . '.php';
+
+        if (file_exists($filePath)) {
+            echo "Controller already exists: {$filePath}\n";
+            return 1;
+        }
+
+        if (
+            !is_dir($directory)
+            && !mkdir($directory, 0755, true)
+            && !is_dir($directory)
+        ) {
+            echo "Unable to create directory: {$directory}\n";
+            return 1;
+        }
+
+        $controller = <<<PHP
+    <?php
+
+    declare(strict_types=1);
+
+    namespace {$namespace};
+
+    use LocalPHP\\Http\\Response;
+
+    class {$className}
+    {
+        /**
+         * Display the page.
+         */
+        public function index(): Response
+        {
+            return view('home');
+        }
+    }
+
+    PHP;
+
+        if (file_put_contents($filePath, $controller) === false) {
+            echo "Unable to create controller: {$filePath}\n";
+            return 1;
+        }
+
+        echo "\033[32mController created successfully!\033[0m\n";
+        echo "  File: {$filePath}\n";
+        echo "  Class: {$namespace}\\{$className}\n";
+
+        return 0;
+    }
+
+}

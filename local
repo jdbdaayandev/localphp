@@ -1,0 +1,11 @@
+<?php
+
+use LocalPHP\Console\Kernel;
+
+$basePath = __DIR__;
+
+require $basePath . '/vendor/autoload.php';
+
+$kernel = new Kernel($basePath);
+
+exit($kernel->run($argv));
